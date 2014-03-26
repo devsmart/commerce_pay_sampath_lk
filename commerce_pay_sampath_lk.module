@@ -1,0 +1,688 @@
+<?php
+
+/**
+ * @file
+ * Implements Sampath Bank Paymant Gateway in Drupal Commerce checkout.
+ */
+
+
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_pay_sampath_lk_commerce_payment_method_info() {
+  $payment_methods = array();
+
+  $payment_methods['sampath_pg'] = array(
+    'base' => 'commerce_pay_sampath_lk',
+    'title' => t('Sampath Bank PG'),
+    'short_title' => t('Sampth'),
+    'description' => t('Sampath Bank Payment Gateway'),
+    'terminal' => FALSE,
+    'offsite' => TRUE,
+    'offsite_autoredirect' => TRUE,
+
+    // Because the order form generation code does not have access to a payment
+    // method info array, we set the bn directly there instead of making use of
+    // this buttonsource variable. It's here for consistency with other payment
+    // methods in this package.
+    'buttonsource' => 'CommerceGuys_Cart_PPS',
+  );
+
+  return $payment_methods;
+}
+
+/**
+ * Returns the default settings for the PayPal WPS payment method.
+ */
+function commerce_pay_sampath_lk_default_settings() {
+  $default_currency = commerce_default_currency();
+
+  return array(
+    'pgdomain' => '',
+	'pgInstanceId' =>'',
+	'merchantId'=> '',
+	'hashKey'=>'',
+    'currency_code' => '840',//'USD',//in_array($default_currency, array_keys(commerce_paypal_currencies('paypal_wps'))) ? $default_currency : 'USD', 
+    'payment_action' => 'initiatePaymentCapture#sale',
+    'ipn_logging' => 'notification', 
+    'ipn_create_billing_profile' => FALSE,
+    'show_payment_instructions' => FALSE,
+  );
+}
+
+/**
+ * Payment method callback: settings form.
+ */
+function commerce_pay_sampath_lk_settings_form($settings = array()) {
+  $form = array();
+
+  // Merge default settings into the stored settings array.
+  $settings = (array) $settings + commerce_pay_sampath_lk_default_settings();
+
+  $form['pgdomain'] = array(
+    '#type' => 'textfield',
+    '#title' => t('pgdomain value provided by Bank'),
+    '#description' => t('pgdomain is a name of the URL redirect to.'),
+    '#default_value' => $settings['pgdomain'],
+    '#required' => TRUE,
+  );
+  $form['pgInstanceId'] = array(
+    '#type' => 'textfield',
+    '#title' => t('pgInstanceId value provided by Bank'),
+    '#description' => t('pgInstanceId value provided by Bank.'),
+    '#default_value' => $settings['pgInstanceId'],
+    '#required' => TRUE,
+  );
+  $form['merchantId'] = array(
+    '#type' => 'textfield',
+    '#title' => t('merchantId value provided by Bank'),
+    '#description' => t('Id of the merchent.'),
+    '#default_value' => $settings['merchantId'],
+    '#required' => TRUE,
+  );
+  $form['hashKey'] = array(
+    '#type' => 'textfield',
+    '#title' => t('hashKey value provided by Bank'),
+    '#description' => t('hashKey value provided by Bank.'),
+    '#default_value' => $settings['hashKey'],
+    '#required' => TRUE,
+  );
+  $form['currency_code'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Default currency'),
+    '#description' => t('Transactions in other currencies will be converted to this currency, so multi-currency sites must be configured to use appropriate conversion rates.'),
+    //'#options' => commerce_paypal_currencies('paypal_wps'),
+    '#default_value' => $settings['currency_code'],
+  );
+    
+  $form['payment_action'] = array(
+    '#type' => 'radios',
+    '#title' => t('Payment action'),
+    '#options' => array(
+      'initiatePaymentCapture#sale' => t('Sale - authorize and capture the funds at the time the payment is processed'),
+      'initiatePaymentCapture#preauth' => t('Pre Auth - reserve funds on the card to be captured later through your bank account'),
+    ),
+    '#default_value' => $settings['payment_action'],
+  );
+  $form['ipn_logging'] = array(
+    '#type' => 'radios',
+    '#title' => t('IPN logging'),
+    '#options' => array(
+      'notification' => t('Log notifications during IPN validation and processing.'),
+      'full_ipn' => t('Log notifications with the full IPN during validation and processing (used for debugging).'),
+    ),
+    '#default_value' => $settings['ipn_logging'],
+  ); 
+  $form['ipn_create_billing_profile'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Create a billing profile based on name and country data in the IPN for any order that does not have one yet.'),
+    '#description' => t('This is most useful for sites that do not collect billing information locally but still want to have customer names on orders.'),
+    '#default_value' => $settings['ipn_create_billing_profile'],
+  );
+  $form['show_payment_instructions'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Show a message on the checkout form when Sampath Bank Payment Gateway is selected telling the customer to "Continue with checkout to complete payment via Sampath Bank Payment Gateway."'),
+    '#default_value' => $settings['show_payment_instructions'],
+  );
+
+  return $form;
+}
+
+/**
+ * Payment method callback: adds a message to the submission form if enabled in
+ * the payment method settings.
+ */
+function commerce_pay_sampath_lk_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+  $form = array();
+
+  //if (!empty($payment_method['settings']['show_payment_instructions'])) {
+    $form['sampath_lk_information'] = array(
+      '#markup' => '<span class="sampath_lk-info">' . t('(Continue with checkout to complete payment via Sampath Bank Internet Payment Gateway.)') . '</span>',
+    );
+  //}
+
+  return $form;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function commerce_pay_sampath_lk_form_commerce_checkout_form_alter(&$form, &$form_state) {
+  // If this checkout form contains the payment method radios...
+  if (!empty($form['commerce_payment']['payment_method']['#options'])) {
+    // Loop over its options array looking for a PayPal WPS option.
+    foreach ($form['commerce_payment']['payment_method']['#options'] as $key => &$value) {
+      list($method_id, $rule_name) = explode('|', $key);
+
+      // If we find PayPal WPS...
+      if ($method_id == 'sampath_pg') {
+        // Prepare the replacement radio button text with icons.
+       // $icons = commerce_paypal_icons();
+       // $value = t('!logo PayPal - pay securely without sharing your financial information', array('!logo' => $icons['paypal']));
+       // $value .= '<div class="commerce-paypal-icons"><span class="label">' . t('Includes:') . '</span>' . implode(' ', $icons) . '</div>';
+		$value = t('Pay using Sampath Bank');
+        // Add the CSS.
+        $form['commerce_payment']['payment_method']['#attached']['css'][] = drupal_get_path('module', 'commerce_pay_sampath_lk') . '/theme/commerce_pay_sampath_lk.theme.css';
+
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Payment method callback: redirect form, a wrapper around the module's general
+ *   use function for building a WPS form.
+ */
+function commerce_pay_sampath_lk_redirect_form($form, &$form_state, $order, $payment_method) {
+  // Return an error if the enabling action's settings haven't been configured.
+  if (empty($payment_method['settings']['pgdomain'])) {
+    drupal_set_message(t('Sampath Payment Gateway is not configured for use. No pgdomain has been specified.'), 'error');
+    return array();
+  }
+  if (empty($payment_method['settings']['pgInstanceId'])) {
+    drupal_set_message(t('Sampath Payment Gateway is not configured for use. No pgInstanceId has been specified.'), 'error');
+    return array();
+  }
+  if (empty($payment_method['settings']['merchantId'])) {
+    drupal_set_message(t('Sampath Payment Gateway is not configured for use. No merchantId has been specified.'), 'error');
+    return array();
+  }
+  if (empty($payment_method['settings']['hashKey'])) {
+    drupal_set_message(t('Sampath Payment Gateway is not configured for use. No hashKey has been specified.'), 'error');
+    return array();
+  }
+  
+  $settings = array(
+    // Return to the previous page when payment is canceled
+   // 'cancel_return' => url('checkout/' . $order->order_id . '/payment/back/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+
+    // Return to the payment redirect page for processing successful payments
+    'return' => url('checkout/' . $order->order_id . '/payment/return/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+//'return' => 'http://store.sridaladamaligawa.lk',
+    // Specify the current payment method instance ID in the notify_url
+   // 'payment_method' => $payment_method['instance_id'],
+
+    // Include the application indicator
+    'bn' => $payment_method['buttonsource'],
+  );
+
+  return commerce_pay_sampath_lk_order_form($form, $form_state, $order, $payment_method['settings'] + $settings);
+}
+
+/**
+ * Payment method callback: redirect form return validation.
+ */
+function commerce_pay_sampath_lk_redirect_form_validate($order, $payment_method) {
+  if (!empty($payment_method['settings']['ipn_logging']) &&
+    $payment_method['settings']['ipn_logging'] == 'full_ipn') {
+    watchdog('commerce_pay_sampath_lk', 'Customer returned from Sampath Payment Gateway with the following POST data:!ipn_data', array('!ipn_data' => '<pre>' . check_plain(print_r($_POST, TRUE)) . '</pre>'), WATCHDOG_NOTICE);
+  }
+
+     // watchdog('commerce_pay_sampath_lk', $_POST);
+  // This may be an unnecessary step, but if for some reason the user does end
+  // up returning at the success URL with a Failed payment, go back.
+  if (!empty($_POST['pg_error_code']) && $_POST['pg_error_code'] != '0') {
+    return FALSE;
+  }
+  $ipn =  $_POST;
+  commerce_pay_sampath_lk_ipn_process($order, $payment_method, $ipn);
+}
+
+/**
+ * Payment method callback: validate an IPN based on receiver e-mail address,
+ *   price, and other parameters as possible.
+ */
+function commerce_pay_sampath_lk_paypal_ipn_validate($order, $payment_method, $ipn) {
+   
+
+  // Return FALSE if the receiver e-mail does not match one specified by the
+  // payment method instance.
+  //if (!in_array(trim(strtolower($ipn['receiver_email'])), $receiver_emails)) {
+ //   commerce_payment_redirect_pane_previous_page($order);
+  //  watchdog('commerce_pay_sampath_lk', 'IPN rejected: invalid receiver e-mail specified (@receiver_email); must match the primary e-mail address on the PayPal account.', array('@receiver_email' => $ipn['receiver_email']), WATCHDOG_NOTICE);
+ //   return FALSE;
+ // }
+
+  // Prepare the IPN data for inclusion in the watchdog message if enabled.
+  $ipn_data = '';
+
+  if (!empty($payment_method['settings']['ipn_logging']) &&
+    $payment_method['settings']['ipn_logging'] == 'full_ipn') {
+    $ipn_data = '<pre>' . check_plain(print_r($ipn, TRUE)) . '</pre>';
+  }
+
+  // Log a message including the PayPal transaction ID if available.
+  if (!empty($ipn['transaction_id'])) {
+    watchdog('commerce_pay_sampath_lk', 'IPN validated for Order @order_number with ID @txn_id.!ipn_data', array('@order_number' => $order->order_number, '@txn_id' => $ipn['transaction_id'], '!ipn_data' => $ipn_data), WATCHDOG_NOTICE);
+  }
+  else {
+    watchdog('commerce_pay_sampath_lk', 'IPN validated for Order @order_number.!ipn_data', array('@order_number' => $order->order_number, '!ipn_data' => $ipn_data), WATCHDOG_NOTICE);
+  }
+}
+
+/**
+ * Payment method callback: process an IPN once it's been validated.
+ */
+function commerce_pay_sampath_lk_ipn_process($order, $payment_method, &$ipn) {
+  // Do not perform any processing on WPS transactions here that do not have
+  // transaction IDs, indicating they are non-payment IPNs such as those used
+  // for subscription signup requests.
+  watchdog('commerce_pay_sampath_lk', ' commerce_pay_sampath_lk_ipn_process', WATCHDOG_INFO);
+   
+  if (empty($ipn['transaction_id'])) {
+    return FALSE;
+  }
+
+  // Exit when we don't get a payment status we recognize.
+  if (!in_array($ipn['status'], array('50020', '50021', '50097'))) {
+    commerce_payment_redirect_pane_previous_page($order);
+    return FALSE;
+  }
+
+  // If this is a prior authorization capture IPN for which we've already
+  // created a transaction...
+  /* if (in_array($ipn['status'], array('50020', '50097')) &&
+    !empty($ipn['auth_id']) && $auth_ipn = commerce_pay_sampath_lk_ipn_load($ipn['auth_id'])) {
+    // Load the prior IPN's transaction and update that with the capture values.
+    $transaction = commerce_payment_transaction_load($auth_ipn['transaction_id']);
+  }
+  else { 
+	  */
+    // Create a new payment transaction for the order.
+    $transaction = commerce_payment_transaction_new('commerce_pay_sampath_lk', $order->order_id);
+    $transaction->instance_id = $payment_method['instance_id'];
+  //}
+
+  $transaction->remote_id = $ipn['transaction_id']; 
+  /*$amt = $ipn['amount'];
+  $amt = substr($amt,0,strlen($amt) -2).'.'.substr($amt,strlen($amt) -2);*/
+  $transaction->amount = commerce_currency_decimal_to_amount($ipn['amount'], 'USD');
+  $transaction->currency_code = $ipn['currency_code'];
+  $transaction->payload[REQUEST_TIME . '-ipn'] = $ipn;
+
+  // Set the transaction's statuses based on the IPN's payment_status.
+  $transaction->remote_status = $ipn['status'];
+
+  // If we didn't get an approval response code...
+  switch ($ipn['status']) {
+    case '50021':
+      $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+      $transaction->message = t("The payment has failed. This happens only if the payment was made from your customer’s bank account.");
+      break;
+    case '50020':
+      $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+      $transaction->message = t('The payment has completed.');
+      break; 
+	case '50097':
+      $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+      $transaction->message = t('The TEST payment has completed.');
+      break; 
+    default:
+      $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+      $transaction->message = $ipn['pg_error_detail'] ;
+      break; 
+  }
+  
+  $ipn['smp_transaction_id'] = $ipn['transaction_id'];
+  // Save the transaction information.
+  commerce_payment_transaction_save($transaction);
+  $ipn['transaction_id'] = $transaction->transaction_id;
+  commerce_pay_sampath_lk_ipn_save($ipn);
+  
+  // Create a billing profile based on the IPN if enabled.
+  if (!empty($payment_method['settings']['ipn_create_billing_profile']) && isset($order->commerce_customer_billing)) {
+    $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+
+    // If this order does not have a billing profile yet...
+    if ($order_wrapper->commerce_customer_billing->value() === NULL) {
+      // Ensure we have the required data in the IPN.
+      if (empty($ipn['residence_country']) || empty($ipn['first_name']) || empty($ipn['last_name'])) {
+        $data = array_intersect_key($ipn, drupal_map_assoc(array('residence_country', 'first_name', 'last_name')));
+        watchdog('commerce_pay_sampath_lk', 'A billing profile for Order @order_number could not be created due to insufficient data in the IPN:!data', array('@order_number' => $order->order_number, '!data' => '<pre>'. check_plain(print_r($data, TRUE)) .'</pre>'), WATCHDOG_WARNING);
+      }
+      else {
+        // Create the new profile now.
+        $profile = commerce_customer_profile_new('billing', $order->uid);
+
+        // Add the address value.
+        $profile_wrapper = entity_metadata_wrapper('commerce_customer_profile', $profile);
+
+        $profile_wrapper->commerce_customer_address = array_merge(addressfield_default_values(), array(
+          'country' => $ipn['residence_country'],
+          'name_line' => $ipn['first_name'] . ' ' . $ipn['last_name'],
+          'first_name' => $ipn['first_name'],
+          'last_name' => $ipn['last_name'],
+        ));
+
+        // Save the profile, reference it from the order, and save the order.
+        $profile_wrapper->save();
+        $order_wrapper->commerce_customer_billing = $profile_wrapper;
+        $order_wrapper->save();
+
+        watchdog('commerce_pay_sampath_lk', 'Billing profile created for Order @order_number containing the first and last names and residence country of the customer based on IPN data.', array('@order_number' => $order->order_number));
+      }
+    }
+  }
+
+  commerce_payment_redirect_pane_next_page($order);
+  watchdog('commerce_pay_sampath_lk', 'IPN processed for Order @order_number with ID @txn_id.', array('@txn_id' => $ipn['transaction_id'], '@order_number' => $order->order_number), WATCHDOG_INFO);
+}
+
+/**
+ * Loads a stored IPN by ID.
+ *
+ * @param $id
+ *   The ID of the IPN to load.
+ * @param $type
+ *   The type of ID you've specified, either the serial numeric ipn_id or the
+ *     actual PayPal txn_id. Defaults to txn_id.
+ *
+ * @return
+ *   The original IPN with some meta data related to local processing.
+ */
+function commerce_pay_sampath_lk_ipn_load($id, $type = 'txn_id') {
+  return db_select('commerce_pay_sampath_lk_ipn', 'cpi')
+    ->fields('cpi')
+    ->condition('cpi.' . $type, $id)
+    ->execute()
+    ->fetchAssoc();
+}
+
+
+function commerce_pay_sampath_lk_ipn_save(&$ipn) {
+  if (!empty($ipn['transaction_id']) && commerce_pay_sampath_lk_ipn_load($ipn['transaction_id'])) {
+    $ipn['changed'] = REQUEST_TIME;
+
+    return drupal_write_record('commerce_pay_sampath_lk_ipn', $ipn, 'transaction_id');
+  }
+  else {
+    $ipn['created'] = REQUEST_TIME;
+    $ipn['changed'] = REQUEST_TIME;
+
+    return drupal_write_record('commerce_pay_sampath_lk_ipn', $ipn);
+  }
+}
+
+/**
+ * Builds a Website Payments Standard form from an order object.
+ *
+ * @param $order
+ *   The fully loaded order being paid for.
+ * @param $settings
+ *   An array of settings used to build out the form, including:
+ *   - server: which server to use, either sandbox or live
+ *   - business: the PayPal e-mail address the payment submits to
+ *   - cancel_return: the URL PayPal should send the user to on cancellation
+ *   - return: the URL PayPal should send the user to on successful payment
+ *   - currency_code: the PayPal currency code to use for this payment if the
+ *     total for the order is in a non-PayPal supported currency
+ *   - language: the PayPal language code to use on the payment form
+ *   - payment_action: the PayPal payment action to use: sale, authorization,
+ *     or order
+ *   - payment_method: optionally a payment method instance ID to include in the
+ *     IPN notify_url
+ *
+ * @return
+ *   A renderable form array.
+ */
+function commerce_pay_sampath_lk_order_form($form, &$form_state, $order, $settings) {
+  $wrapper = entity_metadata_wrapper('commerce_order', $order);
+
+  // Determine the currency code to use to actually process the transaction,
+  // which will either be the default currency code or the currency code of the
+  // order if it's supported by PayPal if that option is enabled.
+  $currency_code = $settings['currency_code'];
+  $order_currency_code = $wrapper->commerce_order_total->currency_code->value();
+ 
+  $amount = $wrapper->commerce_order_total->amount->value();
+
+  // Ensure a default value for the payment_method setting.
+  $settings += array('payment_method' => '');
+  $invoiceId = $order->order_id . '-' . REQUEST_TIME;
+    
+	$pgInstanceId = $settings['pgInstanceId'];
+	$merchantId = $settings['merchantId'];
+	$perform=$settings['payment_action'];
+	$currencyCode=$settings['currency_code']; 
+	$merchantReferenceNo=$invoiceId;
+	$orderDesc= 'Online Payment to Sri Dalada Maligawa';
+	$merchantResponseUrl = $settings['return'];
+	$hashKey = $settings['hashKey'];
+	
+	$messageHash = $pgInstanceId."|".$merchantId."|".$perform."|".$currencyCode."|".$amount."|".$merchantReferenceNo."|".$merchantResponseUrl."|".$hashKey."|";
+	$message_hash = "DYNAMIC-URL:8:".base64_encode(sha1($messageHash, true));
+  // Build the data array that will be translated into hidden form values.
+  $data = array(
+    //  
+    'pg_instance_id' => $pgInstanceId,
+    'merchant_id' => $merchantId, 
+    //'MerchantId' => $settings['merchantId'],
+    //  The type of payment action PayPal should take with this order
+    'perform' => $perform,
+    // the currency code
+    'currency_code' => $currencyCode, 
+	'amount' => $amount, 
+	//'currency' => $settings['currency_code'],
+    // The application generating the API request
+    //'bn' => 'CommerceGuys_Cart_PPS',
+    'merchant_reference_no' => $merchantReferenceNo,
+    //'TransactionId' => $invoiceId,
+    //  
+    'order_desc' => $orderDesc,//'on-line transaction for Sri Dalada Maligawa, Ref : ' . $invoiceId,
+    // Do not display a shipping address prompt at PayPal  'amount' => $amount, 
+   
+	//'message_hash' => $settings['return'],
+	'merchant_response_url' => $merchantResponseUrl,
+	'message_hash' => $message_hash, 
+  );
+
+  // Allow modules to alter parameters of the API request.
+  drupal_alter('commerce_pay_sampath_lk_order_form_data', $data, $order);
+
+  $form['#action'] ='https://' . $settings['pgdomain'] . '/AccosaPG/verify.jsp' ;// 'https://epay.sipg.lk/ipg/Servlet_DirectPAcc';
+
+  foreach ($data as $name => $value) {
+    if (!empty($value)) {
+      $form[$name] = array('#type' => 'hidden', '#value' => $value);
+    }
+  }
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Proceed to Sampath Bank Payment Gateway'),
+  );
+
+  return $form;
+}
+ 
+/**
+ * Formats a price amount into a decimal value as expected by PayPal.
+ *
+ * @param $amount
+ *   An integer price amount.
+ * @param $currency_code
+ *   The currency code of the price.
+ *
+ * @return
+ *   The decimal price amount as expected by PayPal API servers.
+ */
+function commerce_pay_sampath_lk_price_amount($amount, $currency_code) {
+  $rounded_amount = commerce_currency_round($amount, commerce_currency_load($currency_code));
+  return number_format(commerce_currency_amount_to_decimal($rounded_amount, $currency_code), 2, '.', '');
+}
+
+/**
+ * Returns an array of all possible language codes.
+
+function commerce_pay_sampath_lk_languages() {
+  return array(
+    t('By country') => array(
+      'AU' => t('Australia'),
+      'AT' => t('Austria'),
+      'BE' => t('Belgium'),
+      'BR' => t('Brazil'),
+      'CA' => t('Canada'),
+      'CN' => t('China'),
+      'FR' => t('France'),
+      'DE' => t('Germany'),
+      'IT' => t('Italy'),
+      'NL' => t('Netherlands'),
+      'PL' => t('Poland'),
+      'PT' => t('Portugal'),
+      'RU' => t('Russia'),
+      'ES' => t('Spain'),
+      'CH' => t('Switzerland'),
+      'GB' => t('United Kingdom'),
+      'US' => t('United States'),
+    ),
+    t('By language') => array(
+      'da_DK' => t('Danish (for Denmark only)'),
+      'he_IL' => t('Hebrew (for all)'),
+      'id_ID' => t('Indonesian (for Indonesia only)'),
+      'jp_JP' => t('Japanese (for Japan only)'),
+      'no_NO' => t('Norwegian (for Norway only)'),
+      'pt_BR' => t('Brazilian Portuguese (for Portugal and Brazil only)'),
+      'ru_RU' => t('Russian (for Lithuania, Latvia, and Ukraine only)'),
+      'sv_SE' => t('Swedish (for Sweden only)'),
+      'th_TH' => t('Thai (for Thailand only)'),
+      'tr_TR' => t('Turkish (for Turkey only)'),
+      'zh_CN' => t('Simplified Chinese (for China only)'),
+      'zh_HK' => t('Traditional Chinese (for Hong Kong only)'),
+      'zh_TW' => t('Traditional Chinese (for Taiwan only)'),
+    ),
+  );
+}
+ */
+
+
+
+
+/*
+** Date modified: 21st July 2009 07:00 IST
+*
+** Modification to PHP implementation of the Secure Hash Algorithm ( SHA-1 )
+*
+** This code is available under the GNU Lesser General Public License:
+** http://www.gnu.org/licenses/lgpl.txt
+*
+** Based on the PHP implementation by Marcus Campbell
+** http://www.tecknik.net/sha-1/
+*
+** This is modified and the sha1 function is renamed to custom_sha1.
+** Modified by: Vinaya Chandra V
+**
+** Dependencies: sha1_str2blks_SHA1(), sha1_safe_add(), sha1_rol()
+** sha1_zeroFill(), sha1_ft(), sha1_kt()
+**
+** Main Method - custom_sha1(String, boolean)
+**
+**
+*/
+
+function sha1_str2blks_SHA1($str)
+{
+    $strlen_str = strlen($str);
+   
+    $nblk = (($strlen_str + 8) >> 6) + 1;
+   
+    for ($i=0; $i < $nblk * 16; $i++) $blks[$i] = 0;
+   
+    for ($i=0; $i < $strlen_str; $i++)
+    {
+        $blks[$i >> 2] |= ord(substr($str, $i, 1)) << (24 - ($i % 4) * 8);
+    }
+   
+    $blks[$i >> 2] |= 0x80 << (24 - ($i % 4) * 8);
+    $blks[$nblk * 16 - 1] = $strlen_str * 8;
+   
+    return $blks;
+}
+
+function sha1_safe_add($x, $y)
+{
+    $lsw = ($x & 0xFFFF) + ($y & 0xFFFF);
+    $msw = ($x >> 16) + ($y >> 16) + ($lsw >> 16);
+   
+    return ($msw << 16) | ($lsw & 0xFFFF);
+}
+
+function sha1_rol($num, $cnt)
+{
+    return ($num << $cnt) | sha1_zeroFill($num, 32 - $cnt);   
+}
+
+function sha1_zeroFill($a, $b)
+{
+    $bin = decbin($a);
+   
+    $strlen_bin = strlen($bin);
+   
+    $bin = $strlen_bin < $b ? 0 : substr($bin, 0, $strlen_bin - $b);
+   
+    for ($i=0; $i < $b; $i++) $bin = '0'.$bin;
+   
+    return bindec($bin);
+}
+
+function sha1_ft($t, $b, $c, $d)
+{
+    if ($t < 20) return ($b & $c) | ((~$b) & $d);
+    if ($t < 40) return $b ^ $c ^ $d;
+    if ($t < 60) return ($b & $c) | ($b & $d) | ($c & $d);
+   
+    return $b ^ $c ^ $d;
+}
+
+function sha1_kt($t)
+{
+    if ($t < 20) return 1518500249;
+    if ($t < 40) return 1859775393;
+    if ($t < 60) return -1894007588;
+   
+    return -899497514;
+}
+
+function custom_sha1($str, $raw_output=FALSE)
+{
+    if ( $raw_output === TRUE ) return pack('H*', custom_sha1($str, FALSE));
+   
+    $x = sha1_str2blks_SHA1($str);
+    $a =  1732584193;
+    $b = -271733879;
+    $c = -1732584194;
+    $d =  271733878;
+    $e = -1009589776;
+   
+    $x_count = count($x);
+   
+    for ($i = 0; $i < $x_count; $i += 16)
+    {
+        $olda = $a;
+        $oldb = $b;
+        $oldc = $c;
+        $oldd = $d;
+        $olde = $e;
+       
+        for ($j = 0; $j < 80; $j++)
+        {
+            $w[$j] = ($j < 16) ? $x[$i + $j] : sha1_rol($w[$j - 3] ^ $w[$j - 8] ^ $w[$j - 14] ^ $w[$j - 16], 1);
+           
+            $t = sha1_safe_add(sha1_safe_add(sha1_rol($a, 5), sha1_ft($j, $b, $c, $d)), sha1_safe_add(sha1_safe_add($e, $w[$j]), sha1_kt($j)));
+            $e = $d;
+            $d = $c;
+            $c = sha1_rol($b, 30);
+            $b = $a;
+            $a = $t;
+        }
+       
+        $a = sha1_safe_add($a, $olda);
+        $b = sha1_safe_add($b, $oldb);
+        $c = sha1_safe_add($c, $oldc);
+        $d = sha1_safe_add($d, $oldd);
+        $e = sha1_safe_add($e, $olde);
+    }
+   
+    return sprintf('%08x%08x%08x%08x%08x', $a, $b, $c, $d, $e);
+}
+

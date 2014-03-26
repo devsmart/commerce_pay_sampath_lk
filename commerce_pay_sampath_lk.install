@@ -1,0 +1,149 @@
+<?php
+
+/**
+ * @file
+ * Installs the tables required by Commerce (Sampath LK).
+ */
+
+
+/**
+ * Implements hook_schema().
+ */
+function commerce_pay_sampath_lk_schema() {
+  $schema = array();
+
+  $schema['commerce_pay_sampath_lk_ipn'] = array(
+    'description' => 'Stores processed IPNs.',
+    'fields' => array(
+      'ipn_id' => array(
+        'description' => 'Serial numeric ID of the IPN in the local database.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'txn_id' => array(
+        'description' => 'The transaction ID.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'transaction_type_code' => array(
+        'description' => 'The transaction type.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+	  'installments' => array(
+        'description' => 'The installments.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+        'default' => '',
+      ),
+	  'smp_transaction_id' => array(
+        'description' => 'The PG transaction_id.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+        'default' => '',
+      ),
+	  'transaction_id' => array(
+        'description' => 'The payment transaction ID the payment belongs to.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+	  'amount' => array(
+        'description' => 'The payment amount.',
+        'type' => 'numeric',
+        'size' => 'normal',
+        'precision' => 10,
+        'scale' => 2,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+	  'exponent' => array(
+        'description' => 'The exponent.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+        'default' => '',
+      ),
+	  'currency_code' => array(
+        'description' => 'The currency code.',
+        'type' => 'varchar',
+        'length' => 50,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+	   'merchant_reference_no' => array(
+        'description' => 'The merchant reference no.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+	  'status' => array(
+        'description' => 'The status.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+        'default' => '',
+      ),
+	  '3ds_eci' => array(
+        'description' => 'The 3ds_eci.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+        'default' => '',
+      ),
+	  'pg_error_code' => array(
+        'description' => 'The pg_error_code.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+        'default' => '',
+      ),
+	  'pg_error_detail' => array(
+        'description' => 'The pg_error_detail.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+        'default' => '',
+      ),
+	  'pg_error_msg' => array(
+        'description' => 'The pg_error_msg.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+        'default' => '',
+      ),
+	  'message_hash' => array(
+        'description' => 'The message_hash.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => FALSE,
+        'default' => '',
+      ),	   
+    ),
+    'primary key' => array('ipn_id'),
+    'foreign keys' => array(
+      'order_id' => array(
+        'table' => 'commerce_order',
+        'columns'=> array('order_id' => 'order_id'),
+      ),
+      'transaction_id' => array(
+        'table' => 'commerce_payment_transaction',
+        'columns'=> array('payment_id' => 'payment_id'),
+      ),
+    ),
+    'indexes' => array(
+      'txn_id' => array('txn_id'),
+    ),
+  );
+
+  return $schema;
+}
